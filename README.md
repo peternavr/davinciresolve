@@ -1,8 +1,11 @@
-# DaVinci Resolve — Fairlight records silence on PipeWire
+# DaVinci Resolve on Linux — silent Fairlight recording, and startup crashes
 
-**Resolve's Fairlight page records bit-exact digital zero on Linux while every other application's audio works fine.** This repo explains exactly why, and fixes it.
+Two fixes for DaVinci Resolve on modern Linux distributions, in one launcher:
 
-The cause is not a setting, not your microphone, not track arming, and not your PipeWire config. It is a genuine incompatibility between how Fairlight polls ALSA for input and how PipeWire's ALSA plugin reports readiness.
+1. **Fairlight records bit-exact digital zero** while every other application's audio works fine.
+2. **Resolve crashes before its window appears**, with `undefined symbol: g_source_set_static_name`.
+
+Both are genuine incompatibilities between what Resolve ships and what a current distro provides. Each fix is a **no-op when its bug isn't present**, so installing both is safe either way.
 
 ```bash
 git clone https://github.com/peternavr/davinciresolve
@@ -13,7 +16,39 @@ No root. Nothing outside `$HOME`. PipeWire, ALSA, and every other app are left u
 
 ---
 
-## Symptoms
+## Fix 2 first: Resolve won't start at all
+
+If Resolve dies immediately — no splash, no window — run it from a terminal and look for:
+
+```
+/opt/resolve/bin/resolve: symbol lookup error: /lib/x86_64-linux-gnu/libgio-2.0.so.0:
+undefined symbol: g_source_set_static_name
+```
+
+**Cause.** Resolve bundles **glib 2.68** in `/opt/resolve/libs`. Current distributions ship **glib 2.80+**. Resolve's binaries carry a `DT_RPATH` pointing at their own `libs` directory, so the bundled glib wins — but the *system* `libgio` still gets pulled in through system library dependencies. The two versions can't be mixed, and the newer `libgio` looks for a symbol the older `libglib` doesn't have.
+
+**Why `LD_LIBRARY_PATH` doesn't help.** The dynamic linker searches `DT_RPATH` **before** `LD_LIBRARY_PATH`. Setting that variable — which several guides suggest — cannot override an RPATH. `LD_PRELOAD` can, which is what the launcher uses.
+
+**The fix.** Preload the system glib set so exactly one version is in play:
+
+```bash
+LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libglib-2.0.so.0:\
+/usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0:\
+/usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0:\
+/usr/lib/x86_64-linux-gnu/libgio-2.0.so.0 /opt/resolve/bin/resolve
+```
+
+The installed launcher does this **only when your system glib is newer than the bundled copy** — the one direction that causes the crash. On a distro with older glib it changes nothing, so it can't break a working install.
+
+Arch users don't hit this: the [AUR `davinci-resolve-studio` package](https://aur.archlinux.org/packages/davinci-resolve-studio) deletes the bundled glib at install time and symlinks the system one. This does the equivalent at runtime, without root, and survives a Resolve reinstall.
+
+---
+
+## Fix 1: Fairlight records silence
+
+The cause is not a setting, not your microphone, not track arming, and not your PipeWire config. It is a genuine incompatibility between how Fairlight polls ALSA for input and how PipeWire's ALSA plugin reports readiness.
+
+### Symptoms
 
 - Voiceover / Fairlight takes are silent — not quiet, **bit-exact zero** on every sample.
 - The Fairlight **input meter never moves**, no matter which input you patch.
